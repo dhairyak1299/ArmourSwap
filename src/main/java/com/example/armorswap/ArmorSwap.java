@@ -17,12 +17,15 @@ import net.minecraftforge.fml.common.eventhandler.SubscribeEvent;
 import net.minecraftforge.fml.common.gameevent.TickEvent;
 import org.lwjgl.input.Keyboard;
 
-@Mod(modid = "armorswap", name = "Armor Swap", version = "2.3",
+@Mod(modid = "armorswap", name = "Armor Swap", version = "2.4",
         clientSideOnly = true, acceptedMinecraftVersions = "[1.8.9]")
 public class ArmorSwap {
 
-    /** Pieces with less than this fraction of durability left are never worn. */
-    private static final double MIN_DURABILITY_FRACTION = 0.30;
+    /**
+     * A worn piece is replaced only if its durability is BELOW this fraction.
+     * Replacement pieces below this fraction are ignored.  0.20 = 20%.
+     */
+    private static final double MIN_DURABILITY_FRACTION = 0.20;
 
     /** Ticks to wait between pieces (20 ticks = 1 second). 10 = 0.5 s. */
     private static final int TICKS_BETWEEN_PIECES = 10;
@@ -89,11 +92,11 @@ public class ArmorSwap {
         if (nextPiece >= 4) {
             active = false;
             p.closeScreen();
-            msg(p, changed == 0 ? "Armor already optimal." : "Swapped " + changed + " piece(s).");
+            msg(p, changed == 0 ? "No armor needed changing." : "Replaced " + changed + " piece(s).");
             return;
         }
 
-        // Find the next piece that needs changing (pieces already best are skipped).
+        // Find the next piece that needs changing (other pieces are skipped instantly).
         while (nextPiece < 4) {
             boolean swapped = processPiece(mc, p, nextPiece);
             nextPiece++;
@@ -105,35 +108,45 @@ public class ArmorSwap {
         }
     }
 
-    /** Handles one armor slot. Returns true if clicks were sent. */
+    /**
+     * Handles one armor slot. Only replaces the worn piece if it is below the
+     * durability limit (or the slot is empty), using the highest-durability piece
+     * that is itself at or above the limit. Returns true if clicks were sent.
+     */
     private boolean processPiece(Minecraft mc, EntityPlayerSP p, int t) {
         Container c = p.inventoryContainer;
         int armorSlot = FIRST_ARMOR_CONTAINER_SLOT + t;
+        String name = "Piece " + (t + 6);
 
         ItemStack worn = c.getSlot(armorSlot).getStack();
-        int bestSlot = armorSlot;
-        int bestDur = (worn != null && usable(worn)) ? remaining(worn) : -1;
+        if (worn != null && usable(worn)) {
+            dbg(p, name + ": worn piece is fine, left alone");
+            return false;
+        }
 
+        int bestSlot = -1;
+        int bestDur = -1;
         for (int i = FIRST_ARMOR_CONTAINER_SLOT + 4; i <= LAST_CONTAINER_SLOT; i++) {
             ItemStack s = c.getSlot(i).getStack();
             if (s == null || !s.getItem().isValidArmor(s, t, p)) continue;
-            if (!usable(s)) continue;
+            if (!usable(s)) continue;               // below the limit: ignored
             int d = remaining(s);
             if (d > bestDur) { bestDur = d; bestSlot = i; }
         }
 
-        if (bestSlot == armorSlot) {
-            dbg(p, "Piece " + (t + 6) + ": already best or nothing usable, skipped");
+        if (bestSlot < 0) {
+            dbg(p, name + ": needs replacing but no good spare found, left alone");
             return false;
         }
-        dbg(p, "Piece " + (t + 6) + ": swapping slot " + bestSlot + " <-> " + armorSlot);
 
-        click(mc, c, bestSlot);
-        click(mc, c, armorSlot);
-        click(mc, c, bestSlot);
+        dbg(p, name + ": swapping slot " + bestSlot + " <-> " + armorSlot);
+        click(mc, c, bestSlot);      // pick up the spare
+        click(mc, c, armorSlot);     // swap with the worn piece
+        click(mc, c, bestSlot);      // put the old piece in the spare's slot
         return true;
     }
 
+    /** True if the piece has at least MIN_DURABILITY_FRACTION left. */
     private boolean usable(ItemStack s) {
         int max = s.getMaxDamage();
         if (max <= 0) return true;
